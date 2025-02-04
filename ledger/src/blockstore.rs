@@ -692,7 +692,7 @@ impl Blockstore {
         cf_name: &str,
     ) -> Result<impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + '_> {
         let cf = self.db.cf_handle(cf_name);
-        let iterator = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        let iterator = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
         Ok(iterator.map(|pair| pair.unwrap()))
     }
 
@@ -2560,7 +2560,7 @@ impl Blockstore {
         end_index: u64,
         max_missing: usize,
     ) -> Vec<u64> {
-        let Ok(mut db_iterator) = self.db.raw_iterator_cf(self.data_shred_cf.handle()) else {
+        let Ok(mut db_iterator) = self.db.raw_iterator_cf(&self.data_shred_cf.handle()) else {
             return vec![];
         };
 
