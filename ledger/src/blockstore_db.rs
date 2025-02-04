@@ -1,3 +1,4 @@
+use rocksdb::{AsColumnFamilyRef, ColumnFamilyRef};
 pub use rocksdb::Direction as IteratorDirection;
 use {
     crate::{
@@ -20,7 +21,7 @@ use {
         self,
         compaction_filter::CompactionFilter,
         compaction_filter_factory::{CompactionFilterContext, CompactionFilterFactory},
-        properties as RocksProperties, ColumnFamily, ColumnFamilyDescriptor, CompactionDecision,
+        properties as RocksProperties, ColumnFamilyDescriptor, CompactionDecision,
         DBCompactionStyle, DBCompressionType, DBIterator, DBPinnableSlice, DBRawIterator,
         FifoCompactOptions, IteratorMode as RocksIteratorMode, LiveFile, Options,
         WriteBatch as RWriteBatch, DB,
@@ -632,30 +633,37 @@ impl Rocks {
         Ok(())
     }
 
-    fn cf_handle(&self, cf: &str) -> &ColumnFamily {
+    fn cf_handle<'a> (&'a self, cf: &'a str) -> impl AsColumnFamilyRef + 'a {
         self.db
             .cf_handle(cf)
             .expect("should never get an unknown column")
     }
 
-    fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn cf_handle_ref<'a> (&'a self, cf: &'a str) -> ColumnFamilyRef<'a> {
+        self.db
+            .cf_handle(cf)
+            .expect("should never get an unknown column")
+    }
+    
+
+    fn get_cf(&self, cf: &impl AsColumnFamilyRef, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let opt = self.db.get_cf(cf, key)?;
         Ok(opt)
     }
 
-    fn get_pinned_cf(&self, cf: &ColumnFamily, key: &[u8]) -> Result<Option<DBPinnableSlice>> {
+    fn get_pinned_cf(&self, cf: &impl AsColumnFamilyRef, key: &[u8]) -> Result<Option<DBPinnableSlice>> {
         let opt = self.db.get_pinned_cf(cf, key)?;
         Ok(opt)
     }
 
-    fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf(&self, cf: &impl AsColumnFamilyRef, key: &[u8], value: &[u8]) -> Result<()> {
         self.db.put_cf(cf, key, value)?;
         Ok(())
     }
 
     fn multi_get_cf<'a, K, I>(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         keys: I,
     ) -> impl Iterator<Item = Result<Option<DBPinnableSlice>>>
     where
@@ -668,7 +676,7 @@ impl Rocks {
             .map(|out| out.map_err(BlockstoreError::RocksDb))
     }
 
-    fn delete_cf(&self, cf: &ColumnFamily, key: &[u8]) -> Result<()> {
+    fn delete_cf(&self, cf: &impl AsColumnFamilyRef, key: &[u8]) -> Result<()> {
         self.db.delete_cf(cf, key)?;
         Ok(())
     }
@@ -676,7 +684,7 @@ impl Rocks {
     /// Delete files whose slot range is within \[`from`, `to`\].
     fn delete_file_in_range_cf(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         from_key: &[u8],
         to_key: &[u8],
     ) -> Result<()> {
@@ -684,7 +692,7 @@ impl Rocks {
         Ok(())
     }
 
-    fn iterator_cf<C>(&self, cf: &ColumnFamily, iterator_mode: IteratorMode<C::Index>) -> DBIterator
+    fn iterator_cf<C>(&self, cf: &impl AsColumnFamilyRef, iterator_mode: IteratorMode<C::Index>) -> DBIterator
     where
         C: Column,
     {
@@ -702,7 +710,7 @@ impl Rocks {
 
     fn iterator_cf_raw_key(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         iterator_mode: IteratorMode<Vec<u8>>,
     ) -> DBIterator {
         let start_key;
@@ -717,7 +725,7 @@ impl Rocks {
         self.db.iterator_cf(cf, iterator_mode)
     }
 
-    fn raw_iterator_cf(&self, cf: &ColumnFamily) -> DBRawIterator {
+    fn raw_iterator_cf(&self, cf: &impl AsColumnFamilyRef) -> DBRawIterator {
         self.db.raw_iterator_cf(cf)
     }
 
@@ -755,7 +763,7 @@ impl Rocks {
     ///
     /// Full list of properties that return int values could be found
     /// [here](https://github.com/facebook/rocksdb/blob/08809f5e6cd9cc4bc3958dd4d59457ae78c76660/include/rocksdb/db.h#L654-L689).
-    fn get_int_property_cf(&self, cf: &ColumnFamily, name: &'static std::ffi::CStr) -> Result<i64> {
+    fn get_int_property_cf(&self, cf: &impl AsColumnFamilyRef, name: &'static std::ffi::CStr) -> Result<i64> {
         match self.db.property_int_value_cf(cf, name) {
             Ok(Some(value)) => Ok(value.try_into().unwrap()),
             Ok(None) => Ok(0),
@@ -1436,7 +1444,7 @@ impl<C: Column + ColumnName> LedgerColumn<C> {
 
 pub struct WriteBatch<'a> {
     write_batch: RWriteBatch,
-    map: HashMap<&'static str, &'a ColumnFamily>,
+    map: HashMap<&'static str, rocksdb::ColumnFamilyRef<'a> >,
 }
 
 impl Database {
@@ -1463,7 +1471,7 @@ impl Database {
     {
         if let Some(pinnable_slice) = self
             .backend
-            .get_pinned_cf(self.cf_handle::<C>(), &C::key(key))?
+            .get_pinned_cf(&self.cf_handle::<C>(), &C::key(key))?
         {
             let value = C::deserialize(pinnable_slice.as_ref())?;
             Ok(Some(value))
@@ -1480,7 +1488,7 @@ impl Database {
         C: Column + ColumnName,
     {
         let cf = self.cf_handle::<C>();
-        let iter = self.backend.iterator_cf::<C>(cf, iterator_mode);
+        let iter = self.backend.iterator_cf::<C>(&cf, iterator_mode);
         Ok(iter.map(|pair| {
             let (key, value) = pair.unwrap();
             (C::index(&key), value)
@@ -1488,7 +1496,7 @@ impl Database {
     }
 
     #[inline]
-    pub fn cf_handle<C>(&self) -> &ColumnFamily
+    pub fn cf_handle<'a, C>(&'a self) -> impl AsColumnFamilyRef + 'a
     where
         C: Column + ColumnName,
     {
@@ -1509,7 +1517,7 @@ impl Database {
     }
 
     #[inline]
-    pub fn raw_iterator_cf(&self, cf: &ColumnFamily) -> Result<DBRawIterator> {
+    pub fn raw_iterator_cf(&self, cf: &impl AsColumnFamilyRef) -> Result<DBRawIterator> {
         Ok(self.backend.raw_iterator_cf(cf))
     }
 
@@ -1517,7 +1525,7 @@ impl Database {
         let write_batch = self.backend.batch();
         let map = Rocks::columns()
             .into_iter()
-            .map(|desc| (desc, self.backend.cf_handle(desc)))
+            .map(|desc| (desc, self.backend.cf_handle_ref(desc)))
             .collect();
 
         Ok(WriteBatch { write_batch, map })
@@ -1547,7 +1555,7 @@ impl Database {
         // adjusting the `to` slot range by 1.
         let from_index = C::as_index(from);
         let to_index = C::as_index(to.saturating_add(1));
-        batch.delete_range_cf::<C>(cf, from_index, to_index)
+        batch.delete_range_cf::<C>(&cf, from_index, to_index)
     }
 
     /// Delete files whose slot range is within \[`from`, `to`\].
@@ -1556,7 +1564,7 @@ impl Database {
         C: Column + ColumnName,
     {
         self.backend.delete_file_in_range_cf(
-            self.cf_handle::<C>(),
+            &self.cf_handle::<C>(),
             &C::key(C::as_index(from)),
             &C::key(C::as_index(to)),
         )
@@ -1580,7 +1588,7 @@ impl Database {
 
     pub fn compact_range_cf<C: Column + ColumnName>(&self, from: &[u8], to: &[u8]) {
         let cf = self.cf_handle::<C>();
-        self.backend.db.compact_range_cf(cf, Some(from), Some(to));
+        self.backend.db.compact_range_cf(&cf, Some(from), Some(to));
     }
 }
 
@@ -1593,7 +1601,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        let result = self.backend.get_cf(self.handle(), &C::key(key));
+        let result = self.backend.get_cf(&self.handle(), &C::key(key));
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
                 C::NAME,
@@ -1617,7 +1625,7 @@ where
             );
             let result = self
                 .backend
-                .multi_get_cf(self.handle(), &keys)
+                .multi_get_cf(&self.handle(), &keys)
                 .map(|out| Ok(out?.as_deref().map(<[u8]>::to_vec)))
                 .collect::<Vec<Result<Option<_>>>>();
             if let Some(op_start_instant) = is_perf_enabled {
@@ -1639,7 +1647,7 @@ where
         iterator_mode: IteratorMode<C::Index>,
     ) -> Result<impl Iterator<Item = (C::Index, Box<[u8]>)> + '_> {
         let cf = self.handle();
-        let iter = self.backend.iterator_cf::<C>(cf, iterator_mode);
+        let iter = self.backend.iterator_cf::<C>(&cf, iterator_mode);
         Ok(iter.map(|pair| {
             let (key, value) = pair.unwrap();
             (C::index(&key), value)
@@ -1653,18 +1661,18 @@ where
         let cf = self.handle();
         let from = Some(C::key(C::as_index(from)));
         let to = Some(C::key(C::as_index(to)));
-        self.backend.db.compact_range_cf(cf, from, to);
+        self.backend.db.compact_range_cf(&cf, from, to);
         Ok(true)
     }
 
     #[inline]
-    pub fn handle(&self) -> &ColumnFamily {
+    pub fn handle<'a>(&'a self) -> impl AsColumnFamilyRef + 'a {
         self.backend.cf_handle(C::NAME)
     }
 
     #[cfg(test)]
     pub fn is_empty(&self) -> Result<bool> {
-        let mut iter = self.backend.raw_iterator_cf(self.handle());
+        let mut iter = self.backend.raw_iterator_cf(&self.handle());
         iter.seek_to_first();
         Ok(!iter.valid())
     }
@@ -1674,7 +1682,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.write_perf_status,
         );
-        let result = self.backend.put_cf(self.handle(), &C::key(key), value);
+        let result = self.backend.put_cf(&self.handle(), &C::key(key), value);
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
                 C::NAME,
@@ -1692,7 +1700,7 @@ where
     /// Full list of properties that return int values could be found
     /// [here](https://github.com/facebook/rocksdb/blob/08809f5e6cd9cc4bc3958dd4d59457ae78c76660/include/rocksdb/db.h#L654-L689).
     pub fn get_int_property(&self, name: &'static std::ffi::CStr) -> Result<i64> {
-        self.backend.get_int_property_cf(self.handle(), name)
+        self.backend.get_int_property_cf(&self.handle(), name)
     }
 
     pub fn delete(&self, key: C::Index) -> Result<()> {
@@ -1700,7 +1708,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.write_perf_status,
         );
-        let result = self.backend.delete_cf(self.handle(), &C::key(key));
+        let result = self.backend.delete_cf(&self.handle(), &C::key(key));
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
                 C::NAME,
@@ -1729,7 +1737,7 @@ where
             );
             let result = self
                 .backend
-                .multi_get_cf(self.handle(), &keys)
+                .multi_get_cf(&self.handle(), &keys)
                 .map(|out| out?.as_deref().map(C::deserialize).transpose())
                 .collect::<Vec<Result<Option<_>>>>();
             if let Some(op_start_instant) = is_perf_enabled {
@@ -1756,7 +1764,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        if let Some(pinnable_slice) = self.backend.get_pinned_cf(self.handle(), key)? {
+        if let Some(pinnable_slice) = self.backend.get_pinned_cf(&self.handle(), key)? {
             let value = C::deserialize(pinnable_slice.as_ref())?;
             result = Ok(Some(value))
         }
@@ -1781,7 +1789,7 @@ where
 
         let result = self
             .backend
-            .put_cf(self.handle(), &C::key(key), &serialized_value);
+            .put_cf(&self.handle(), &C::key(key), &serialized_value);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
@@ -1814,7 +1822,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        let result = self.backend.get_pinned_cf(self.handle(), key);
+        let result = self.backend.get_pinned_cf(&self.handle(), key);
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
                 C::NAME,
@@ -1840,7 +1848,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        let result = self.backend.get_pinned_cf(self.handle(), &C::key(key));
+        let result = self.backend.get_pinned_cf(&self.handle(), &C::key(key));
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
                 C::NAME,
@@ -1865,7 +1873,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.write_perf_status,
         );
-        let result = self.backend.put_cf(self.handle(), &C::key(key), &buf);
+        let result = self.backend.put_cf(&self.handle(), &C::key(key), &buf);
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
                 C::NAME,
@@ -1888,7 +1896,7 @@ where
         iterator_mode: IteratorMode<C::Index>,
     ) -> Result<impl Iterator<Item = (C::Index, Box<[u8]>)> + '_> {
         let cf = self.handle();
-        let iter = self.backend.iterator_cf::<C>(cf, iterator_mode);
+        let iter = self.backend.iterator_cf::<C>(&cf, iterator_mode);
         Ok(iter.filter_map(|pair| {
             let (key, value) = pair.unwrap();
             C::try_current_index(&key).ok().map(|index| (index, value))
@@ -1908,7 +1916,7 @@ where
                 IteratorMode::From(raw_key, direction)
             }
         };
-        let iter = self.backend.iterator_cf_raw_key(cf, iterator_mode_raw_key);
+        let iter = self.backend.iterator_cf_raw_key(&cf, iterator_mode_raw_key);
         Ok(iter.filter_map(|pair| {
             let (key, value) = pair.unwrap();
             C::try_deprecated_index(&key)
@@ -1921,7 +1929,7 @@ where
 impl<'a> WriteBatch<'a> {
     pub fn put_bytes<C: Column + ColumnName>(&mut self, key: C::Index, bytes: &[u8]) -> Result<()> {
         self.write_batch
-            .put_cf(self.get_cf::<C>(), C::key(key), bytes);
+            .put_cf(&self.get_cf::<C>(), C::key(key), bytes);
         Ok(())
     }
 
@@ -1930,7 +1938,7 @@ impl<'a> WriteBatch<'a> {
     }
 
     pub(crate) fn delete_raw<C: Column + ColumnName>(&mut self, key: &[u8]) -> Result<()> {
-        self.write_batch.delete_cf(self.get_cf::<C>(), key);
+        self.write_batch.delete_cf(&self.get_cf::<C>(), key);
         Ok(())
     }
 
@@ -1941,13 +1949,14 @@ impl<'a> WriteBatch<'a> {
     ) -> Result<()> {
         let serialized_value = C::serialize(value)?;
         self.write_batch
-            .put_cf(self.get_cf::<C>(), C::key(key), serialized_value);
+            .put_cf(&self.get_cf::<C>(), C::key(key), serialized_value);
         Ok(())
     }
 
     #[inline]
-    fn get_cf<C: Column + ColumnName>(&self) -> &'a ColumnFamily {
-        self.map[C::NAME]
+    fn get_cf<C: Column + ColumnName>(&self) -> ColumnFamilyRef<'a> {
+        // this clone should be the clone of a reference
+        self.map[C::NAME].clone()
     }
 
     /// Adds a \[`from`, `to`) range deletion entry to the batch.
@@ -1958,7 +1967,7 @@ impl<'a> WriteBatch<'a> {
     /// logic.
     fn delete_range_cf<C: Column>(
         &mut self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         from: C::Index,
         to: C::Index, // exclusive
     ) -> Result<()> {
@@ -2350,7 +2359,7 @@ pub mod tests {
                 enforce_ulimit_nofile: false,
                 ..BlockstoreOptions::default()
             };
-            let mut rocks = Rocks::open(db_path, options).unwrap();
+            let rocks = Rocks::open(db_path, options).unwrap();
 
             // Introduce a new column that will not be known
             rocks
@@ -2391,7 +2400,7 @@ pub mod tests {
             let mut buf = Vec::with_capacity(value.encoded_len());
             value.encode(&mut buf)?;
             self.backend
-                .put_cf(self.handle(), &C::deprecated_key(key), &buf)
+                .put_cf(&self.handle(), &C::deprecated_key(key), &buf)
         }
     }
 
@@ -2402,7 +2411,7 @@ pub mod tests {
         pub fn put_deprecated(&self, key: C::DeprecatedIndex, value: &C::Type) -> Result<()> {
             let serialized_value = C::serialize(value)?;
             self.backend
-                .put_cf(self.handle(), &C::deprecated_key(key), &serialized_value)
+                .put_cf(&self.handle(), &C::deprecated_key(key), &serialized_value)
         }
     }
 
@@ -2415,7 +2424,7 @@ pub mod tests {
             iterator_mode: IteratorMode<Vec<u8>>,
         ) -> DBIterator {
             let cf = self.handle();
-            self.backend.iterator_cf_raw_key(cf, iterator_mode)
+            self.backend.iterator_cf_raw_key(&cf, iterator_mode)
         }
     }
 }
