@@ -1,3 +1,4 @@
+use rocksdb::AsColumnFamilyRef;
 pub use rocksdb::Direction as IteratorDirection;
 use {
     crate::{
@@ -23,7 +24,7 @@ use {
         self,
         compaction_filter::CompactionFilter,
         compaction_filter_factory::{CompactionFilterContext, CompactionFilterFactory},
-        properties as RocksProperties, ColumnFamily, ColumnFamilyDescriptor, CompactionDecision,
+        properties as RocksProperties, ColumnFamilyDescriptor, CompactionDecision,
         DBCompressionType, DBIterator, DBPinnableSlice, DBRawIterator,
         IteratorMode as RocksIteratorMode, LiveFile, Options, WriteBatch as RWriteBatch, DB,
     },
@@ -120,7 +121,7 @@ impl Rocks {
         let column_options = Arc::from(options.column_options);
 
         // Open the database
-        let mut db = match options.access_type {
+        let db = match options.access_type {
             AccessType::Primary | AccessType::PrimaryForMaintenance => {
                 DB::open_cf_descriptors(&db_options, &path, cf_descriptors)?
             }
@@ -334,34 +335,34 @@ impl Rocks {
         Ok(())
     }
 
-    pub(crate) fn cf_handle(&self, cf: &str) -> &ColumnFamily {
+    pub(crate) fn cf_handle<'a>(&'a self, cf: &'a str) -> impl AsColumnFamilyRef + 'a {
         self.db
             .cf_handle(cf)
             .expect("should never get an unknown column")
     }
 
-    fn get_cf<K: AsRef<[u8]>>(&self, cf: &ColumnFamily, key: K) -> Result<Option<Vec<u8>>> {
+    fn get_cf<K: AsRef<[u8]>>(&self, cf: &impl AsColumnFamilyRef, key: K) -> Result<Option<Vec<u8>>> {
         let opt = self.db.get_cf(cf, key)?;
         Ok(opt)
     }
 
     fn get_pinned_cf(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         key: impl AsRef<[u8]>,
     ) -> Result<Option<DBPinnableSlice>> {
         let opt = self.db.get_pinned_cf(cf, key)?;
         Ok(opt)
     }
 
-    fn put_cf<K: AsRef<[u8]>>(&self, cf: &ColumnFamily, key: K, value: &[u8]) -> Result<()> {
+    fn put_cf<K: AsRef<[u8]>>(&self, cf: &impl AsColumnFamilyRef, key: K, value: &[u8]) -> Result<()> {
         self.db.put_cf(cf, key, value)?;
         Ok(())
     }
 
     fn multi_get_cf<'a, K, I>(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         keys: I,
     ) -> impl Iterator<Item = Result<Option<DBPinnableSlice>>>
     where
@@ -374,7 +375,7 @@ impl Rocks {
             .map(|out| out.map_err(BlockstoreError::RocksDb))
     }
 
-    fn delete_cf<K: AsRef<[u8]>>(&self, cf: &ColumnFamily, key: K) -> Result<()> {
+    fn delete_cf<K: AsRef<[u8]>>(&self, cf: &impl AsColumnFamilyRef, key: K) -> Result<()> {
         self.db.delete_cf(cf, key)?;
         Ok(())
     }
@@ -382,7 +383,7 @@ impl Rocks {
     /// Delete files whose slot range is within \[`from`, `to`\].
     fn delete_file_in_range_cf<K: AsRef<[u8]>>(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         from_key: K,
         to_key: K,
     ) -> Result<()> {
@@ -392,13 +393,13 @@ impl Rocks {
 
     pub(crate) fn iterator_cf(
         &self,
-        cf: &ColumnFamily,
+        cf: &impl AsColumnFamilyRef,
         iterator_mode: RocksIteratorMode,
     ) -> DBIterator {
         self.db.iterator_cf(cf, iterator_mode)
     }
 
-    pub(crate) fn raw_iterator_cf(&self, cf: &ColumnFamily) -> Result<DBRawIterator> {
+    pub(crate) fn raw_iterator_cf(&self, cf: &impl AsColumnFamilyRef) -> Result<DBRawIterator> {
         Ok(self.db.raw_iterator_cf(cf))
     }
 
@@ -438,7 +439,7 @@ impl Rocks {
     ///
     /// Full list of properties that return int values could be found
     /// [here](https://github.com/facebook/rocksdb/blob/08809f5e6cd9cc4bc3958dd4d59457ae78c76660/include/rocksdb/db.h#L654-L689).
-    fn get_int_property_cf(&self, cf: &ColumnFamily, name: &'static std::ffi::CStr) -> Result<i64> {
+    fn get_int_property_cf(&self, cf: &impl AsColumnFamilyRef, name: &'static std::ffi::CStr) -> Result<i64> {
         match self.db.property_int_value_cf(cf, name) {
             Ok(Some(value)) => Ok(value.try_into().unwrap()),
             Ok(None) => Ok(0),
@@ -563,17 +564,17 @@ impl AsRef<[u8]> for BlockstoreByteReference<'_> {
 }
 
 impl WriteBatch {
-    fn put_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K, value: &[u8]) -> Result<()> {
+    fn put_cf<K: AsRef<[u8]>>(&mut self, cf: &impl AsColumnFamilyRef, key: K, value: &[u8]) -> Result<()> {
         self.write_batch.put_cf(cf, key, value);
         Ok(())
     }
 
-    fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) -> Result<()> {
+    fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &impl AsColumnFamilyRef, key: K) -> Result<()> {
         self.write_batch.delete_cf(cf, key);
         Ok(())
     }
 
-    fn delete_range_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, from: K, to: K) -> Result<()> {
+    fn delete_range_cf<K: AsRef<[u8]>>(&mut self, cf: &impl AsColumnFamilyRef, from: K, to: K) -> Result<()> {
         self.write_batch.delete_range_cf(cf, from, to);
         Ok(())
     }
@@ -590,7 +591,7 @@ where
         );
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.get_cf(self.handle(), key);
+        let result = self.backend.get_cf(&self.handle(), key);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
@@ -627,7 +628,7 @@ where
 
         let result = self
             .backend
-            .multi_get_cf(self.handle(), keys)
+            .multi_get_cf(&self.handle(), keys)
             .map(|out| Ok(out?.map(BlockstoreByteReference::from)));
 
         if let Some(op_start_instant) = is_perf_enabled {
@@ -656,7 +657,7 @@ where
             }
         };
 
-        let iter = self.backend.iterator_cf(self.handle(), iterator_mode);
+        let iter = self.backend.iterator_cf(&self.handle(), iterator_mode);
         Ok(iter.map(|pair| {
             let (key, value) = pair.unwrap();
             (C::index(&key), value)
@@ -679,17 +680,17 @@ where
         // run everytime. So, set the keys as None which will result in rocksdb
         // using the heavier method to determine if a compaction should run
         let (start, end) = (None::<&[u8]>, None::<&[u8]>);
-        self.backend.db.compact_range_cf(self.handle(), start, end);
+        self.backend.db.compact_range_cf(&self.handle(), start, end);
     }
 
     #[inline]
-    pub fn handle(&self) -> &ColumnFamily {
+    pub fn handle(&self) -> impl AsColumnFamilyRef + '_ {
         self.backend.cf_handle(C::NAME)
     }
 
     #[cfg(test)]
     pub fn is_empty(&self) -> Result<bool> {
-        let mut iter = self.backend.raw_iterator_cf(self.handle())?;
+        let mut iter = self.backend.raw_iterator_cf(&self.handle())?;
         iter.seek_to_first();
         Ok(!iter.valid())
     }
@@ -701,7 +702,7 @@ where
         );
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.put_cf(self.handle(), key, value);
+        let result = self.backend.put_cf(&self.handle(), key, value);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
@@ -721,7 +722,7 @@ where
         value: &[u8],
     ) -> Result<()> {
         let key = <C as Column>::key(&index);
-        batch.put_cf(self.handle(), key, value)
+        batch.put_cf(&self.handle(), key, value)
     }
 
     /// Retrieves the specified RocksDB integer property of the current
@@ -730,7 +731,7 @@ where
     /// Full list of properties that return int values could be found
     /// [here](https://github.com/facebook/rocksdb/blob/08809f5e6cd9cc4bc3958dd4d59457ae78c76660/include/rocksdb/db.h#L654-L689).
     pub fn get_int_property(&self, name: &'static std::ffi::CStr) -> Result<i64> {
-        self.backend.get_int_property_cf(self.handle(), name)
+        self.backend.get_int_property_cf(&self.handle(), name)
     }
 
     pub fn delete(&self, index: C::Index) -> Result<()> {
@@ -740,7 +741,7 @@ where
         );
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.delete_cf(self.handle(), key);
+        let result = self.backend.delete_cf(&self.handle(), key);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
@@ -755,7 +756,7 @@ where
 
     pub fn delete_in_batch(&self, batch: &mut WriteBatch, index: C::Index) -> Result<()> {
         let key = <C as Column>::key(&index);
-        batch.delete_cf(self.handle(), key)
+        batch.delete_cf(&self.handle(), key)
     }
 
     /// Adds a \[`from`, `to`\] range that deletes all entries between the `from` slot
@@ -772,7 +773,7 @@ where
         // adjusting the `to` slot range by 1.
         let from_key = <C as Column>::key(&C::as_index(from));
         let to_key = <C as Column>::key(&C::as_index(to.saturating_add(1)));
-        batch.delete_range_cf(self.handle(), from_key, to_key)
+        batch.delete_range_cf(&self.handle(), from_key, to_key)
     }
 
     /// Delete files whose slot range is within \[`from`, `to`\].
@@ -783,7 +784,7 @@ where
         let from_key = <C as Column>::key(&C::as_index(from));
         let to_key = <C as Column>::key(&C::as_index(to));
         self.backend
-            .delete_file_in_range_cf(self.handle(), from_key, to_key)
+            .delete_file_in_range_cf(&self.handle(), from_key, to_key)
     }
 }
 
@@ -805,7 +806,7 @@ where
 
         let result = self
             .backend
-            .multi_get_cf(self.handle(), keys)
+            .multi_get_cf(&self.handle(), keys)
             .map(|out| out?.as_deref().map(C::deserialize).transpose());
 
         if let Some(op_start_instant) = is_perf_enabled {
@@ -832,7 +833,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        if let Some(pinnable_slice) = self.backend.get_pinned_cf(self.handle(), key)? {
+        if let Some(pinnable_slice) = self.backend.get_pinned_cf(&self.handle(), key)? {
             let value = C::deserialize(pinnable_slice.as_ref())?;
             result = Ok(Some(value))
         }
@@ -856,7 +857,7 @@ where
         let serialized_value = C::serialize(value)?;
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.put_cf(self.handle(), key, &serialized_value);
+        let result = self.backend.put_cf(&self.handle(), key, &serialized_value);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
@@ -877,7 +878,7 @@ where
     ) -> Result<()> {
         let key = <C as Column>::key(&index);
         let serialized_value = C::serialize(value)?;
-        batch.put_cf(self.handle(), key, &serialized_value)
+        batch.put_cf(&self.handle(), key, &serialized_value)
     }
 }
 
@@ -901,7 +902,7 @@ where
             self.column_options.rocks_perf_sample_interval,
             &self.read_perf_status,
         );
-        let result = self.backend.get_pinned_cf(self.handle(), key);
+        let result = self.backend.get_pinned_cf(&self.handle(), key);
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
                 C::NAME,
@@ -929,7 +930,7 @@ where
         );
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.get_pinned_cf(self.handle(), key);
+        let result = self.backend.get_pinned_cf(&self.handle(), key);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_read_perf(
@@ -957,7 +958,7 @@ where
         );
 
         let key = <C as Column>::key(&index);
-        let result = self.backend.put_cf(self.handle(), key, &buf);
+        let result = self.backend.put_cf(&self.handle(), key, &buf);
 
         if let Some(op_start_instant) = is_perf_enabled {
             report_rocksdb_write_perf(
@@ -990,7 +991,7 @@ where
             }
         };
 
-        let iter = self.backend.iterator_cf(self.handle(), iterator_mode);
+        let iter = self.backend.iterator_cf(&self.handle(), iterator_mode);
         Ok(iter.filter_map(|pair| {
             let (key, value) = pair.unwrap();
             C::try_current_index(&key).ok().map(|index| (index, value))
@@ -1011,7 +1012,7 @@ where
             }
         };
 
-        let iterator = self.backend.iterator_cf(self.handle(), iterator_mode);
+        let iterator = self.backend.iterator_cf(&self.handle(), iterator_mode);
         Ok(iterator.filter_map(|pair| {
             let (key, value) = pair.unwrap();
             C::try_deprecated_index(&key)
@@ -1026,7 +1027,7 @@ where
         index: C::DeprecatedIndex,
     ) -> Result<()> {
         let key = C::deprecated_key(index);
-        batch.delete_cf(self.handle(), &key)
+        batch.delete_cf(&self.handle(), &key)
     }
 }
 
@@ -1353,7 +1354,7 @@ pub mod tests {
                 enforce_ulimit_nofile: false,
                 ..BlockstoreOptions::default()
             };
-            let mut rocks = Rocks::open(db_path.to_path_buf(), options).unwrap();
+            let rocks = Rocks::open(db_path.to_path_buf(), options).unwrap();
 
             // Introduce a new column that will not be known
             rocks
@@ -1412,7 +1413,7 @@ pub mod tests {
 
         // Create a program_costs column to simulate an old database that had the column
         {
-            let mut rocks = Rocks::open(db_path.to_path_buf(), options.clone()).unwrap();
+            let rocks = Rocks::open(db_path.to_path_buf(), options.clone()).unwrap();
             rocks
                 .db
                 .create_cf(DEPRECATED_PROGRAM_COSTS_COLUMN_NAME, &Options::default())
@@ -1443,7 +1444,7 @@ pub mod tests {
             let mut buf = Vec::with_capacity(value.encoded_len());
             value.encode(&mut buf)?;
             self.backend
-                .put_cf(self.handle(), C::deprecated_key(index), &buf)
+                .put_cf(&self.handle(), C::deprecated_key(index), &buf)
         }
     }
 
@@ -1454,7 +1455,7 @@ pub mod tests {
         pub fn put_deprecated(&self, index: C::DeprecatedIndex, value: &C::Type) -> Result<()> {
             let serialized_value = C::serialize(value)?;
             self.backend
-                .put_cf(self.handle(), C::deprecated_key(index), &serialized_value)
+                .put_cf(&self.handle(), C::deprecated_key(index), &serialized_value)
         }
     }
 }
