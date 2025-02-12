@@ -8,6 +8,7 @@ on:
 env:
   ROOT: "master"
   SCION: "dev"
+  PAT: ${{ secrets.WORKFLOW_TOKEN }}
 
 jobs:
   check_branches:
@@ -18,6 +19,7 @@ jobs:
       with:
         fetch-depth: 0 # necessary to access all commits
         ref: ${{ env.SCION }}
+        token: ${{ env.PAT }}
     - run: git fetch origin
     - name: Check if SCION is an extension of ROOT
       id: check
