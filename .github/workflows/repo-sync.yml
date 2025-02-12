@@ -17,4 +17,4 @@
           source_repo: "https://github.com/anza-xyz/agave"
           source_branch: "master"
           destination_branch: "master"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.WORKFLOW_TOKEN }}
