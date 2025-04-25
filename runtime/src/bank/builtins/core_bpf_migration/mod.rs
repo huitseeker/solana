@@ -1,4 +1,5 @@
 pub(crate) mod error;
+mod http;
 mod source_buffer;
 mod target_builtin;
 mod target_core_bpf;
@@ -6,6 +7,7 @@ mod target_core_bpf;
 use {
     crate::bank::Bank,
     error::CoreBpfMigrationError,
+    http::HttpClient,
     num_traits::{CheckedAdd, CheckedSub},
     solana_builtins::core_bpf_migration::CoreBpfMigrationConfig,
     solana_program_runtime::{
@@ -208,6 +210,13 @@ impl Bank {
             .merge(&program_cache_for_tx_batch.drain_modified_entries());
 
         Ok(())
+    }
+
+    /// Make an HTTP GET request to the specified URL and return the response body
+    /// as bytes, limited to 1KB
+    pub fn http_get(&self, url: &str) -> Result<Vec<u8>, CoreBpfMigrationError> {
+        let client = HttpClient::new();
+        client.get(url)
     }
 
     pub(crate) fn migrate_builtin_to_core_bpf(

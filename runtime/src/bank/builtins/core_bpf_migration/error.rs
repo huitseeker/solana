@@ -48,4 +48,13 @@ pub enum CoreBpfMigrationError {
     /// Invalid verified build hash
     #[error("Invalid build hash. Expected: {0:?}, Got: {1:?}")]
     BuildHashMismatch(Hash, Hash),
+    /// HTTP GET request failed
+    #[error("HTTP GET request failed: {0}")]
+    HttpGetRequestFailed(String),
+    /// HTTP GET response too large
+    #[error("HTTP GET response too large. Max size: {0}, Got: {1}")]
+    HttpGetResponseTooLarge(usize, usize),
+    /// HTTP GET invalid URL
+    #[error("HTTP GET invalid URL: {0}")]
+    HttpGetInvalidUrl(String),
 }
