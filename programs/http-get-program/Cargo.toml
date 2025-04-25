@@ -1,0 +1,14 @@
+[package]
+name = "rialo-http-get-program"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP GET program"
+license = "Apache-2.0"
+
+[dependencies]
+rialo-http-get-interface = { path = "../http-get-interface" }
+solana-program = { workspace = true }
+solana-pubkey = { workspace = true }
+solana-instruction = { workspace = true }
+serde = { workspace = true }
+serde_derive = { workspace = true }
